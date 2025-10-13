@@ -38,19 +38,19 @@ router.get('/', async (req, res) => {
 
     if (endDate) {
       paramCount++;
-      whereClause += ` AND transaction_date <= ${paramCount}`;
+      whereClause += ` AND transaction_date <= $${paramCount}`;
       params.push(endDate);
     }
 
     if (category) {
       paramCount++;
-      whereClause += ` AND category = ${paramCount}`;
+      whereClause += ` AND category = $${paramCount}`;
       params.push(category);
     }
 
     if (type) {
       paramCount++;
-      whereClause += ` AND transaction_type = ${paramCount}`;
+      whereClause += ` AND transaction_type = $${paramCount}`;
       params.push(type);
     }
 
@@ -79,7 +79,7 @@ router.get('/', async (req, res) => {
        FROM transactions
        ${whereClause}
        ORDER BY ${sortField} ${order}
-       LIMIT ${paramCount + 1} OFFSET ${paramCount + 2}`,
+       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`,
       params
     );
 
