@@ -349,7 +349,7 @@ const BudgetTracker = () => {
   };
 
   const handleDeleteTransaction = async (id) => {
-    if (!confirm('Delete this transaction?')) return;
+    if (!window.confirm('Delete this transaction?')) return;
     
     try {
       setLoading(true);
