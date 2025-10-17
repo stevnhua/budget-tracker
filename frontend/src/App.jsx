@@ -1,19 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, DollarSign, TrendingUp, TrendingDown, PieChart, Calendar, Download, Settings, LogOut, User, Plus, Trash2, Filter, X, Eye, EyeOff, Menu, Home, BarChart3, Target, CreditCard, Search, Edit2, Check } from 'lucide-react';
-import { LineChart, Line, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Upload, DollarSign, TrendingUp, TrendingDown, PieChart, Calendar, Download, Settings, LogOut, User, Plus, Trash2, Filter, X, Eye, EyeOff, Menu, Home, BarChart3, Target, CreditCard, Search, Edit2, Check, Sparkles, ArrowUpRight, ArrowDownRight, FileText, Bell, ChevronRight, Tag, Store } from 'lucide-react';
+import { LineChart, Line, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart } from 'recharts';
 import Papa from 'papaparse';
 
 const API_BASE_URL = 'http://localhost:5000/api';
 
 const BudgetTracker = () => {
-  // Authentication State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
   const [authView, setAuthView] = useState('login');
   const [showPassword, setShowPassword] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
-
-  // App State
   const [currentView, setCurrentView] = useState('dashboard');
   const [transactions, setTransactions] = useState([]);
   const [filteredTransactions, setFilteredTransactions] = useState([]);
@@ -28,20 +25,49 @@ const BudgetTracker = () => {
   });
   const [insights, setInsights] = useState([]);
   const [monthlyData, setMonthlyData] = useState([]);
-
-  // UI State
   const [loading, setLoading] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showAddTransaction, setShowAddTransaction] = useState(false);
-  const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [showQuickCategorize, setShowQuickCategorize] = useState(false);
+  const [merchantGroups, setMerchantGroups] = useState([]);
+  
+  const getCurrentMonthRange = () => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return {
+      start: firstDay.toISOString().split('T')[0],
+      end: lastDay.toISOString().split('T')[0]
+    };
+  };
+
+  const [dateRange, setDateRange] = useState(getCurrentMonthRange());
+  const [viewMode, setViewMode] = useState('month');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [editingTransaction, setEditingTransaction] = useState(null);
   const [notification, setNotification] = useState({ show: false, message: '', type: '' });
 
-  const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+  const COLORS = ['#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#8b5cf6', '#06b6d4', '#10b981', '#f97316'];
+  
+  const CATEGORY_OPTIONS = [
+    'Food & Dining',
+    'Groceries',
+    'Transportation',
+    'Gas & Fuel',
+    'Housing & Rent',
+    'Utilities',
+    'Entertainment',
+    'Shopping',
+    'Healthcare',
+    'Insurance',
+    'Travel',
+    'Education',
+    'Personal Care',
+    'Subscriptions',
+    'Other'
+  ];
 
-  // Check authentication on mount
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
     if (token) {
@@ -49,14 +75,12 @@ const BudgetTracker = () => {
     }
   }, []);
 
-  // Fetch data when authenticated
   useEffect(() => {
     if (isAuthenticated) {
       loadDashboardData();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, dateRange]);
 
-  // API Helper
   const apiCall = async (endpoint, method = 'GET', body = null) => {
     const token = localStorage.getItem('accessToken');
     const options = {
@@ -74,7 +98,6 @@ const BudgetTracker = () => {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
 
     if (response.status === 401) {
-      // Token expired, try refresh
       const refreshed = await refreshToken();
       if (refreshed) {
         return apiCall(endpoint, method, body);
@@ -92,7 +115,6 @@ const BudgetTracker = () => {
     return response.json();
   };
 
-  // Authentication Functions
   const refreshToken = async () => {
     try {
       const refreshToken = localStorage.getItem('refreshToken');
@@ -189,31 +211,42 @@ const BudgetTracker = () => {
     }
   };
 
-  // Data Loading Functions
   const loadDashboardData = async () => {
     setLoading(true);
     try {
+      const params = new URLSearchParams();
+      if (dateRange.start) params.append('startDate', dateRange.start);
+      if (dateRange.end) params.append('endDate', dateRange.end);
+
       const [transactionsData, kpisData, insightsData] = await Promise.all([
-        apiCall('/transactions?limit=1000'),
-        apiCall('/analytics/kpis'),
+        apiCall(`/transactions?limit=1000&${params.toString()}`),
+        apiCall(`/analytics/kpis?${params.toString()}`),
         apiCall('/analytics/insights')
       ]);
 
-      setTransactions(transactionsData.transactions);
-      setFilteredTransactions(transactionsData.transactions);
+      // Filter out payments and returns - we only care about actual spending
+      const spendingTransactions = transactionsData.transactions.filter(t => 
+        t.transaction_type !== 'payment' && t.category !== 'Return/Refund'
+      );
+
+      setTransactions(spendingTransactions);
+      setFilteredTransactions(spendingTransactions);
       setKpis(kpisData.kpis);
       setMonthlyData(kpisData.monthlyTrend);
       setInsights(insightsData);
 
-      // Calculate categories
+      // Group by category for spending breakdown
       const catGroups = {};
-      transactionsData.transactions.forEach(t => {
+      spendingTransactions.forEach(t => {
         if (!catGroups[t.category]) {
           catGroups[t.category] = 0;
         }
         catGroups[t.category] += Math.abs(t.amount);
       });
       setCategories(catGroups);
+
+      // Group uncategorized transactions by merchant for quick categorization
+      groupTransactionsByMerchant(spendingTransactions);
     } catch (error) {
       showNotification('Failed to load data', 'error');
     } finally {
@@ -221,7 +254,69 @@ const BudgetTracker = () => {
     }
   };
 
-  // Transaction Functions
+  const groupTransactionsByMerchant = (txns) => {
+    const uncategorized = txns.filter(t => t.category === 'Other' || !t.category);
+    
+    // Group by merchant/description
+    const groups = {};
+    uncategorized.forEach(t => {
+      const key = t.merchant || extractMerchantFromDescription(t.description);
+      if (!groups[key]) {
+        groups[key] = [];
+      }
+      groups[key].push(t);
+    });
+
+    // Convert to array and sort by count
+    const groupArray = Object.entries(groups)
+      .map(([merchant, txns]) => ({
+        merchant,
+        transactions: txns,
+        count: txns.length,
+        totalAmount: txns.reduce((sum, t) => sum + Math.abs(t.amount), 0)
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    setMerchantGroups(groupArray);
+  };
+
+  const extractMerchantFromDescription = (description) => {
+    // Extract merchant name from transaction description
+    // Remove common prefixes and dates
+    let merchant = description.toUpperCase();
+    merchant = merchant.replace(/\d{2}\/\d{2}\/\d{4}/g, '');
+    merchant = merchant.replace(/\d{2}-\d{2}-\d{4}/g, '');
+    merchant = merchant.replace(/PURCHASE|PAYMENT|DEBIT|CREDIT/gi, '');
+    merchant = merchant.trim();
+    
+    // Take first significant part
+    const parts = merchant.split(/\s+/);
+    return parts.slice(0, 3).join(' ').substring(0, 50);
+  };
+
+  const categorizeMerchantTransactions = async (merchant, category) => {
+    const group = merchantGroups.find(g => g.merchant === merchant);
+    if (!group) return;
+
+    try {
+      setLoading(true);
+      
+      // Update all transactions from this merchant
+      await Promise.all(
+        group.transactions.map(t => 
+          apiCall(`/transactions/${t.id}`, 'PUT', { category })
+        )
+      );
+      
+      showNotification(`Categorized ${group.count} transactions from ${merchant}`, 'success');
+      loadDashboardData();
+    } catch (error) {
+      showNotification('Failed to update categories', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -254,7 +349,7 @@ const BudgetTracker = () => {
     });
   };
 
-  const normalizeTransactions = (data, filename) => {
+  const normalizeTransactions = (data) => {
     return data.map((row) => {
       const cleanRow = {};
       Object.keys(row).forEach(key => {
@@ -262,7 +357,7 @@ const BudgetTracker = () => {
       });
 
       const date = cleanRow.Date || cleanRow.date || cleanRow['Transaction Date'] || 
-                   cleanRow.Timestamp || new Date().toISOString().split('T')[0];
+                   cleanRow['Trans. Date'] || cleanRow.Timestamp || new Date().toISOString().split('T')[0];
       
       const description = cleanRow.Description || cleanRow.description || 
                          cleanRow.Merchant || cleanRow.merchant || 
@@ -274,52 +369,109 @@ const BudgetTracker = () => {
         cleanRow.Value || cleanRow.Total || 0
       );
 
-      // Handle debit/credit columns
-      if (cleanRow.Debit && !cleanRow.Credit) {
-        amount = -Math.abs(amount);
-      } else if (cleanRow.Credit && !cleanRow.Debit) {
+      // Credit card logic: positive = expense, negative = payment/return
+      let transactionType = 'expense';
+      if (amount < 0) {
+        transactionType = 'payment'; // Skip this in the app
         amount = Math.abs(amount);
       }
 
       const category = cleanRow.Category || cleanRow.category || 
-                      cleanRow.Type || cleanRow.type || 
                       categorizeTransaction(description, amount);
 
       return {
         transactionDate: date,
         description,
-        amount,
+        amount: transactionType === 'expense' ? -Math.abs(amount) : Math.abs(amount),
         category,
-        transactionType: amount >= 0 ? 'income' : 'expense',
-        merchant: cleanRow.Merchant || cleanRow.merchant || null
+        transactionType,
+        merchant: cleanRow.Merchant || cleanRow.merchant || extractMerchantFromDescription(description)
       };
     });
   };
 
   const categorizeTransaction = (description, amount) => {
     const desc = description.toLowerCase();
-    if (amount >= 0) return 'Income';
-    if (desc.includes('grocery') || desc.includes('food') || desc.includes('restaurant')) return 'Food';
-    if (desc.includes('gas') || desc.includes('transport') || desc.includes('uber')) return 'Transportation';
-    if (desc.includes('rent') || desc.includes('mortgage') || desc.includes('utilities')) return 'Housing';
-    if (desc.includes('entertainment') || desc.includes('netflix') || desc.includes('spotify')) return 'Entertainment';
-    if (desc.includes('health') || desc.includes('medical') || desc.includes('pharmacy')) return 'Healthcare';
-    if (desc.includes('shopping') || desc.includes('amazon') || desc.includes('store')) return 'Shopping';
+    
+    // Food & Dining
+    if (desc.includes('restaurant') || desc.includes('cafe') || desc.includes('coffee') || 
+        desc.includes('mcdonald') || desc.includes('starbucks') || desc.includes('pizza') ||
+        desc.includes('burger') || desc.includes('doordash') || desc.includes('uber eats') ||
+        desc.includes('skip the dishes') || desc.includes('tim hortons') || desc.includes('subway')) 
+        return 'Food & Dining';
+    
+    // Groceries
+    if (desc.includes('grocery') || desc.includes('supermarket') || desc.includes('walmart') ||
+        desc.includes('costco') || desc.includes('safeway') || desc.includes('loblaws') ||
+        desc.includes('metro') || desc.includes('sobeys') || desc.includes('food basics') ||
+        desc.includes('no frills') || desc.includes('freshco')) 
+        return 'Groceries';
+    
+    // Gas & Fuel
+    if (desc.includes('gas') || desc.includes('petro') || desc.includes('shell') ||
+        desc.includes('esso') || desc.includes('chevron') || desc.includes('fuel') ||
+        desc.includes('husky') || desc.includes('pioneer')) 
+        return 'Gas & Fuel';
+    
+    // Transportation
+    if (desc.includes('transport') || desc.includes('uber') || desc.includes('lyft') ||
+        desc.includes('taxi') || desc.includes('transit') || desc.includes('parking') ||
+        desc.includes('presto') || desc.includes('ttc') || desc.includes('go train')) 
+        return 'Transportation';
+    
+    // Housing & Utilities
+    if (desc.includes('rent') || desc.includes('mortgage') || desc.includes('landlord')) 
+        return 'Housing & Rent';
+    if (desc.includes('electric') || desc.includes('hydro') || desc.includes('water') ||
+        desc.includes('internet') || desc.includes('phone') || desc.includes('rogers') ||
+        desc.includes('bell') || desc.includes('telus') || desc.includes('fido')) 
+        return 'Utilities';
+    
+    // Entertainment & Subscriptions
+    if (desc.includes('netflix') || desc.includes('spotify') || desc.includes('amazon prime') ||
+        desc.includes('disney') || desc.includes('subscription') || desc.includes('apple.com')) 
+        return 'Subscriptions';
+    if (desc.includes('movie') || desc.includes('cinema') || desc.includes('theatre') ||
+        desc.includes('game') || desc.includes('entertainment') || desc.includes('concert')) 
+        return 'Entertainment';
+    
+    // Healthcare
+    if (desc.includes('pharmacy') || desc.includes('medical') || desc.includes('doctor') ||
+        desc.includes('dental') || desc.includes('health') || desc.includes('shoppers drug') ||
+        desc.includes('rexall')) 
+        return 'Healthcare';
+    
+    // Shopping
+    if (desc.includes('amazon') || desc.includes('store') || desc.includes('shop') ||
+        desc.includes('mall') || desc.includes('retail') || desc.includes('best buy') ||
+        desc.includes('canadian tire') || desc.includes('home depot')) 
+        return 'Shopping';
+    
+    // Insurance
+    if (desc.includes('insurance')) 
+        return 'Insurance';
+    
+    // Travel
+    if (desc.includes('airline') || desc.includes('hotel') || desc.includes('airbnb') ||
+        desc.includes('travel') || desc.includes('booking') || desc.includes('flight')) 
+        return 'Travel';
+    
     return 'Other';
   };
 
   const handleAddTransaction = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
+    const amount = parseFloat(formData.get('amount'));
     
     try {
       setLoading(true);
       await apiCall('/transactions', 'POST', {
         transactionDate: formData.get('date'),
         description: formData.get('description'),
-        amount: parseFloat(formData.get('amount')),
+        amount: -Math.abs(amount), // Always negative for expenses
         category: formData.get('category'),
-        transactionType: parseFloat(formData.get('amount')) >= 0 ? 'income' : 'expense',
+        transactionType: 'expense',
         notes: formData.get('notes') || null
       });
       
@@ -363,7 +515,24 @@ const BudgetTracker = () => {
     }
   };
 
-  // Filter transactions
+  const changeViewMode = (mode) => {
+    setViewMode(mode);
+    const now = new Date();
+    
+    if (mode === 'month') {
+      setDateRange(getCurrentMonthRange());
+    } else if (mode === 'year') {
+      const firstDay = new Date(now.getFullYear(), 0, 1);
+      const lastDay = new Date(now.getFullYear(), 11, 31);
+      setDateRange({
+        start: firstDay.toISOString().split('T')[0],
+        end: lastDay.toISOString().split('T')[0]
+      });
+    } else {
+      setDateRange({ start: '', end: '' });
+    }
+  };
+
   useEffect(() => {
     let filtered = [...transactions];
 
@@ -386,141 +555,156 @@ const BudgetTracker = () => {
     setFilteredTransactions(filtered);
   }, [transactions, dateRange, selectedCategory, searchTerm]);
 
-  // Notification
   const showNotification = (message, type) => {
     setNotification({ show: true, message, type });
-    setTimeout(() => setNotification({ show: false, message: '', type: '' }), 3000);
+    setTimeout(() => setNotification({ show: false, message: '', type: '' }), 4000);
   };
 
-  // Chart Data
   const getCategoryData = () => {
-    return Object.entries(categories).map(([name, value]) => ({
-      name,
-      value: Math.abs(value)
-    })).slice(0, 8);
+    return Object.entries(categories)
+      .map(([name, value]) => ({
+        name,
+        value: Math.abs(value)
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
   };
 
-  // Auth View
+  const getUncategorizedCount = () => {
+    return transactions.filter(t => t.category === 'Other' || !t.category).length;
+  };
+
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+      <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center p-4 relative overflow-hidden">
+        <div className="absolute inset-0 opacity-30">
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-white rounded-full mix-blend-overlay filter blur-3xl animate-pulse"></div>
+          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-white rounded-full mix-blend-overlay filter blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
+        </div>
+
+        <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl w-full max-w-md p-10 relative z-10 border border-white/20">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
-              <DollarSign size={32} className="text-blue-600" />
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl mb-4 shadow-lg">
+              <DollarSign size={40} className="text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-gray-900">Budget Tracker</h1>
-            <p className="text-gray-600 mt-2">Smart budgeting for Canadians</p>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">Budget Tracker</h1>
+            <p className="text-gray-600 mt-2 text-lg">Smart budgeting for Canadians</p>
           </div>
 
           {authView === 'login' ? (
-            <form onSubmit={handleLogin}>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-                  <input
-                    type="email"
-                    name="email"
-                    required
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="you@example.com"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      name="password"
-                      required
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="••••••••"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
-                    >
-                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
-                  </div>
-                </div>
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50"
-                >
-                  {authLoading ? 'Logging in...' : 'Log In'}
-                </button>
+            <form onSubmit={handleLogin} className="space-y-5">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Email</label>
+                <input
+                  type="email"
+                  name="email"
+                  required
+                  className="w-full px-5 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all duration-200 outline-none"
+                  placeholder="you@example.com"
+                />
               </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    name="password"
+                    required
+                    className="w-full px-5 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all duration-200 outline-none pr-12"
+                    placeholder="••••••••"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
+              </div>
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-xl font-semibold hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {authLoading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Logging in...
+                  </span>
+                ) : 'Log In'}
+              </button>
               <p className="text-center mt-6 text-gray-600">
                 Don't have an account?{' '}
                 <button
                   type="button"
                   onClick={() => setAuthView('register')}
-                  className="text-blue-600 font-semibold hover:underline"
+                  className="text-indigo-600 font-semibold hover:text-indigo-700 transition-colors"
                 >
                   Sign up
                 </button>
               </p>
             </form>
           ) : (
-            <form onSubmit={handleRegister}>
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">First Name</label>
-                    <input
-                      type="text"
-                      name="firstName"
-                      required
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Last Name</label>
-                    <input
-                      type="text"
-                      name="lastName"
-                      required
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  </div>
-                </div>
+            <form onSubmit={handleRegister} className="space-y-5">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">First Name</label>
                   <input
-                    type="email"
-                    name="email"
+                    type="text"
+                    name="firstName"
                     required
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-5 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all duration-200 outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Last Name</label>
                   <input
-                    type="password"
-                    name="password"
+                    type="text"
+                    name="lastName"
                     required
-                    minLength={8}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Min. 8 characters"
+                    className="w-full px-5 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all duration-200 outline-none"
                   />
                 </div>
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50"
-                >
-                  {authLoading ? 'Creating account...' : 'Create Account'}
-                </button>
               </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Email</label>
+                <input
+                  type="email"
+                  name="email"
+                  required
+                  className="w-full px-5 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all duration-200 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Password</label>
+                <input
+                  type="password"
+                  name="password"
+                  required
+                  minLength={8}
+                  className="w-full px-5 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all duration-200 outline-none"
+                  placeholder="Min. 8 characters"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-xl font-semibold hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 disabled:opacity-50"
+              >
+                {authLoading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Creating account...
+                  </span>
+                ) : 'Create Account'}
+              </button>
               <p className="text-center mt-6 text-gray-600">
                 Already have an account?{' '}
                 <button
                   type="button"
                   onClick={() => setAuthView('login')}
-                  className="text-blue-600 font-semibold hover:underline"
+                  className="text-indigo-600 font-semibold hover:text-indigo-700 transition-colors"
                 >
                   Log in
                 </button>
@@ -532,45 +716,89 @@ const BudgetTracker = () => {
     );
   }
 
-  // Main App View
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Notification */}
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {notification.show && (
-        <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-lg shadow-lg ${
-          notification.type === 'success' ? 'bg-green-500' : 'bg-red-500'
-        } text-white font-semibold animate-slide-in`}>
+        <div className={`fixed top-6 right-6 z-50 px-6 py-4 rounded-2xl shadow-2xl ${
+          notification.type === 'success' 
+            ? 'bg-gradient-to-r from-green-500 to-emerald-600' 
+            : 'bg-gradient-to-r from-red-500 to-rose-600'
+        } text-white font-semibold flex items-center gap-3`} style={{ animation: 'slideIn 0.3s ease-out' }}>
+          {notification.type === 'success' ? <Check size={20} /> : <X size={20} />}
           {notification.message}
         </div>
       )}
 
-      {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-40">
+      <header className="bg-white/80 backdrop-blur-xl shadow-sm sticky top-0 z-40 border-b border-gray-200/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-3">
+          <div className="flex justify-between items-center h-20">
+            <div className="flex items-center gap-4">
               <button
                 onClick={() => setShowMobileMenu(!showMobileMenu)}
-                className="lg:hidden p-2 rounded-lg hover:bg-gray-100"
+                className="lg:hidden p-2.5 rounded-xl hover:bg-gray-100 transition-colors"
               >
                 <Menu size={24} />
               </button>
-              <DollarSign size={32} className="text-blue-600" />
-              <h1 className="text-xl font-bold text-gray-900">Budget Tracker</h1>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                  <DollarSign size={28} className="text-white" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">Budget Tracker</h1>
+                  <p className="text-xs text-gray-500">Financial Dashboard</p>
+                </div>
+              </div>
             </div>
+            
+            <div className="hidden md:flex items-center gap-2 bg-gray-100 p-1 rounded-xl">
+              <button
+                onClick={() => changeViewMode('month')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                  viewMode === 'month' 
+                    ? 'bg-white text-indigo-600 shadow-sm' 
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                This Month
+              </button>
+              <button
+                onClick={() => changeViewMode('year')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                  viewMode === 'year' 
+                    ? 'bg-white text-indigo-600 shadow-sm' 
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                This Year
+              </button>
+              <button
+                onClick={() => changeViewMode('all')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                  viewMode === 'all' 
+                    ? 'bg-white text-indigo-600 shadow-sm' 
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                All Time
+              </button>
+            </div>
+
             <div className="flex items-center gap-4">
-              <span className="hidden sm:inline text-sm text-gray-600">
-                {user?.first_name} {user?.last_name}
-              </span>
-              <span className="hidden sm:inline px-3 py-1 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">
-                {user?.subscription_tier?.toUpperCase()}
-              </span>
+              <div className="hidden sm:flex items-center gap-3 px-4 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
+                  <User size={16} className="text-white" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{user?.first_name} {user?.last_name}</p>
+                  <p className="text-xs text-indigo-600 font-medium">{user?.subscription_tier?.toUpperCase()}</p>
+                </div>
+              </div>
               <button
                 onClick={handleLogout}
-                className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                className="flex items-center gap-2 px-4 py-2.5 text-gray-700 hover:bg-gray-100 rounded-xl transition-all duration-200 hover:scale-105"
               >
                 <LogOut size={18} />
-                <span className="hidden sm:inline">Logout</span>
+                <span className="hidden sm:inline font-medium">Logout</span>
               </button>
             </div>
           </div>
@@ -578,145 +806,236 @@ const BudgetTracker = () => {
       </header>
 
       <div className="flex max-w-7xl mx-auto">
-        {/* Sidebar */}
-        <aside className={`${showMobileMenu ? 'block' : 'hidden'} lg:block w-64 bg-white shadow-sm min-h-screen`}>
-          <nav className="p-4 space-y-2">
+        <aside className={`${showMobileMenu ? 'block' : 'hidden'} lg:block w-72 bg-white/80 backdrop-blur-xl min-h-screen border-r border-gray-200/50`}>
+          <nav className="p-6 space-y-2">
             <button
               onClick={() => { setCurrentView('dashboard'); setShowMobileMenu(false); }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                currentView === 'dashboard' ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-50'
+              className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-xl transition-all duration-200 ${
+                currentView === 'dashboard' 
+                  ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg scale-105' 
+                  : 'text-gray-700 hover:bg-gray-100'
               }`}
             >
-              <Home size={20} />
-              <span className="font-medium">Dashboard</span>
+              <Home size={22} />
+              <span className="font-semibold">Dashboard</span>
+              {currentView === 'dashboard' && <ChevronRight size={18} className="ml-auto" />}
             </button>
             <button
               onClick={() => { setCurrentView('transactions'); setShowMobileMenu(false); }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                currentView === 'transactions' ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-50'
+              className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-xl transition-all duration-200 ${
+                currentView === 'transactions' 
+                  ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg scale-105' 
+                  : 'text-gray-700 hover:bg-gray-100'
               }`}
             >
-              <CreditCard size={20} />
-              <span className="font-medium">Transactions</span>
+              <CreditCard size={22} />
+              <span className="font-semibold">Transactions</span>
+              {currentView === 'transactions' && <ChevronRight size={18} className="ml-auto" />}
             </button>
             <button
               onClick={() => { setCurrentView('analytics'); setShowMobileMenu(false); }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                currentView === 'analytics' ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-50'
+              className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-xl transition-all duration-200 ${
+                currentView === 'analytics' 
+                  ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg scale-105' 
+                  : 'text-gray-700 hover:bg-gray-100'
               }`}
             >
-              <BarChart3 size={20} />
-              <span className="font-medium">Analytics</span>
+              <BarChart3 size={22} />
+              <span className="font-semibold">Analytics</span>
+              {currentView === 'analytics' && <ChevronRight size={18} className="ml-auto" />}
             </button>
           </nav>
+
+          <div className="p-6 space-y-4">
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Quick Stats</h3>
+            <div className="space-y-3">
+              <div className="p-4 bg-gradient-to-br from-red-50 to-rose-50 rounded-xl border border-red-100">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm text-red-700 font-medium">Total Spent</span>
+                  <TrendingDown size={16} className="text-red-600" />
+                </div>
+                <p className="text-2xl font-bold text-red-700">${kpis.totalExpenses.toFixed(0)}</p>
+                <p className="text-xs text-red-600 mt-1">{viewMode === 'month' ? 'This month' : viewMode === 'year' ? 'This year' : 'All time'}</p>
+              </div>
+              
+              {getUncategorizedCount() > 0 && (
+                <div className="p-4 bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl border border-yellow-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-yellow-800 font-medium">Needs Category</span>
+                    <Tag size={16} className="text-yellow-600" />
+                  </div>
+                  <p className="text-2xl font-bold text-yellow-800">{getUncategorizedCount()}</p>
+                  <button
+                    onClick={() => setShowQuickCategorize(true)}
+                    className="mt-2 w-full text-xs bg-yellow-600 hover:bg-yellow-700 text-white font-semibold py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1"
+                  >
+                    <Store size={14} />
+                    Quick Categorize
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </aside>
 
-        {/* Main Content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 p-6 lg:p-8">
           {loading && (
-            <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+            <div className="flex flex-col items-center justify-center py-20">
+              <div className="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+              <p className="text-gray-600 font-medium">Loading your data...</p>
             </div>
           )}
 
           {!loading && currentView === 'dashboard' && (
             <div className="space-y-6">
-              {/* Quick Actions */}
+              <div>
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">Dashboard</h2>
+                <p className="text-gray-600">
+                  Viewing spending for: <span className="font-semibold">{
+                    viewMode === 'month' ? `${new Date(dateRange.start).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}` :
+                    viewMode === 'year' ? `${new Date(dateRange.start).getFullYear()}` :
+                    'All Time'
+                  }</span>
+                </p>
+              </div>
+
               <div className="flex flex-wrap gap-4">
-                <label className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700 transition-colors">
+                <label className="flex items-center gap-3 px-6 py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl cursor-pointer hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 font-semibold">
                   <Upload size={20} />
-                  <span className="font-semibold">Import CSV</span>
+                  <span>Import CSV</span>
                   <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
                 </label>
                 <button
                   onClick={() => setShowAddTransaction(true)}
-                  className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  className="flex items-center gap-3 px-6 py-3.5 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 font-semibold"
                 >
                   <Plus size={20} />
-                  <span className="font-semibold">Add Transaction</span>
+                  <span>Add Transaction</span>
                 </button>
+                {getUncategorizedCount() > 0 && (
+                  <button
+                    onClick={() => setShowQuickCategorize(true)}
+                    className="flex items-center gap-3 px-6 py-3.5 bg-gradient-to-r from-yellow-500 to-orange-600 text-white rounded-xl hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 font-semibold"
+                  >
+                    <Store size={20} />
+                    <span>Quick Categorize ({getUncategorizedCount()})</span>
+                  </button>
+                )}
               </div>
 
-              {/* KPI Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl p-6 text-white shadow-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <TrendingUp size={24} />
-                    <DollarSign size={20} className="opacity-75" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="bg-gradient-to-br from-red-500 to-rose-600 rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-300 relative overflow-hidden group">
+                  <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  <div className="relative z-10">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                        <TrendingDown size={24} />
+                      </div>
+                      <DollarSign size={20} className="opacity-75" />
+                    </div>
+                    <div className="text-4xl font-bold mb-1">${kpis.totalExpenses.toFixed(2)}</div>
+                    <div className="text-red-100 font-medium">Total Spending</div>
                   </div>
-                  <div className="text-3xl font-bold">${kpis.totalIncome.toFixed(2)}</div>
-                  <div className="text-green-100 text-sm mt-1">Total Income</div>
                 </div>
 
-                <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl p-6 text-white shadow-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <TrendingDown size={24} />
-                    <DollarSign size={20} className="opacity-75" />
+                <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-300 relative overflow-hidden group">
+                  <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  <div className="relative z-10">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                        <Calendar size={24} />
+                      </div>
+                      <Sparkles size={20} className="opacity-75" />
+                    </div>
+                    <div className="text-4xl font-bold mb-1">${(kpis.totalExpenses / (transactions.length || 1)).toFixed(2)}</div>
+                    <div className="text-blue-100 font-medium">Avg per Day</div>
                   </div>
-                  <div className="text-3xl font-bold">${kpis.totalExpenses.toFixed(2)}</div>
-                  <div className="text-red-100 text-sm mt-1">Total Expenses</div>
                 </div>
 
-                <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-6 text-white shadow-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <PieChart size={24} />
-                    <DollarSign size={20} className="opacity-75" />
+                <div className="bg-gradient-to-br from-purple-500 to-pink-600 rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-300 relative overflow-hidden group">
+                  <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  <div className="relative z-10">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                        <Target size={24} />
+                      </div>
+                      <CreditCard size={20} className="opacity-75" />
+                    </div>
+                    <div className="text-4xl font-bold mb-1">{kpis.transactionCount}</div>
+                    <div className="text-purple-100 font-medium">Transactions</div>
                   </div>
-                  <div className="text-3xl font-bold">${kpis.netSavings.toFixed(2)}</div>
-                  <div className="text-blue-100 text-sm mt-1">Net Savings</div>
                 </div>
 
-                <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl p-6 text-white shadow-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <Target size={24} />
-                    <span className="text-2xl opacity-75">%</span>
+                <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-300 relative overflow-hidden group">
+                  <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  <div className="relative z-10">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                        <PieChart size={24} />
+                      </div>
+                      <span className="text-2xl opacity-75">#</span>
+                    </div>
+                    <div className="text-4xl font-bold mb-1">{Object.keys(categories).length}</div>
+                    <div className="text-teal-100 font-medium">Categories</div>
                   </div>
-                  <div className="text-3xl font-bold">{kpis.savingsRate.toFixed(1)}%</div>
-                  <div className="text-purple-100 text-sm mt-1">Savings Rate</div>
                 </div>
               </div>
 
-              {/* Insights */}
               {insights.length > 0 && (
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <h3 className="text-lg font-semibold mb-4">Insights</h3>
+                <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-200/50">
+                  <div className="flex items-center gap-3 mb-5">
+                    <div className="p-2 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-lg">
+                      <Sparkles size={20} className="text-white" />
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-900">AI Insights</h3>
+                  </div>
                   <div className="space-y-3">
                     {insights.map((insight, idx) => (
                       <div
                         key={idx}
-                        className={`p-4 rounded-lg border-l-4 ${
-                          insight.type === 'success' ? 'bg-green-50 border-green-500' :
-                          insight.type === 'warning' ? 'bg-yellow-50 border-yellow-500' :
-                          'bg-blue-50 border-blue-500'
+                        className={`p-5 rounded-xl border-l-4 transition-all duration-200 hover:scale-[1.02] ${
+                          insight.type === 'success' ? 'bg-gradient-to-r from-green-50 to-emerald-50 border-green-500' :
+                          insight.type === 'warning' ? 'bg-gradient-to-r from-yellow-50 to-orange-50 border-yellow-500' :
+                          'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-500'
                         }`}
                       >
-                        <div className="font-semibold text-gray-900">{insight.title}</div>
-                        <div className="text-sm text-gray-600 mt-1">{insight.message}</div>
+                        <div className="font-bold text-gray-900 mb-1">{insight.title}</div>
+                        <div className="text-sm text-gray-600">{insight.message}</div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Charts */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <h3 className="text-lg font-semibold mb-4">Monthly Trend</h3>
+                <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-200/50 hover:shadow-xl transition-shadow duration-300">
+                  <h3 className="text-lg font-bold text-gray-900 mb-5">Spending Trend</h3>
                   <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={monthlyData}>
+                    <AreaChart data={monthlyData}>
+                      <defs>
+                        <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis dataKey="month" stroke="#6b7280" />
-                      <YAxis stroke="#6b7280" />
-                      <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb' }} />
-                      <Legend />
-                      <Line type="monotone" dataKey="income" stroke="#10b981" strokeWidth={2} />
-                      <Line type="monotone" dataKey="expenses" stroke="#ef4444" strokeWidth={2} />
-                    </LineChart>
+                      <XAxis dataKey="month" stroke="#6b7280" style={{ fontSize: '12px' }} />
+                      <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} />
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(255, 255, 255, 0.95)', 
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '12px',
+                          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                        }} 
+                      />
+                      <Area type="monotone" dataKey="expenses" stroke="#ef4444" strokeWidth={3} fillOpacity={1} fill="url(#colorExpenses)" name="Expenses" />
+                    </AreaChart>
                   </ResponsiveContainer>
                 </div>
 
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <h3 className="text-lg font-semibold mb-4">Spending by Category</h3>
+                <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-200/50 hover:shadow-xl transition-shadow duration-300">
+                  <h3 className="text-lg font-bold text-gray-900 mb-5">Spending by Category</h3>
                   <ResponsiveContainer width="100%" height={300}>
                     <RechartsPie>
                       <Pie
@@ -733,32 +1052,47 @@ const BudgetTracker = () => {
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb' }} />
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(255, 255, 255, 0.95)', 
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '12px',
+                          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                        }} 
+                      />
                     </RechartsPie>
                   </ResponsiveContainer>
                 </div>
               </div>
 
-              {/* Recent Transactions Preview */}
-              <div className="bg-white rounded-xl p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold">Recent Transactions</h3>
+              <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-200/50">
+                <div className="flex items-center justify-between mb-5">
+                  <h3 className="text-xl font-bold text-gray-900">Recent Transactions</h3>
                   <button
                     onClick={() => setCurrentView('transactions')}
-                    className="text-blue-600 hover:text-blue-700 text-sm font-semibold"
+                    className="text-indigo-600 hover:text-indigo-700 text-sm font-bold flex items-center gap-1 hover:gap-2 transition-all"
                   >
-                    View All →
+                    View All 
+                    <ChevronRight size={16} />
                   </button>
                 </div>
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {filteredTransactions.slice(0, 5).map((t) => (
-                    <div key={t.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg">
-                      <div className="flex-1">
-                        <div className="font-medium text-gray-900">{t.description}</div>
-                        <div className="text-sm text-gray-500">{t.transaction_date} • {t.category}</div>
+                    <div key={t.id} className="flex items-center justify-between p-4 hover:bg-gray-50 rounded-xl transition-all duration-200 hover:scale-[1.01] border border-transparent hover:border-gray-200">
+                      <div className="flex items-center gap-4 flex-1">
+                        <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br from-red-100 to-rose-100">
+                          <ArrowDownRight size={20} className="text-red-600" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-semibold text-gray-900">{t.description}</div>
+                          <div className="text-sm text-gray-500 flex items-center gap-2">
+                            <Calendar size={14} />
+                            {t.transaction_date} • {t.category}
+                          </div>
+                        </div>
                       </div>
-                      <div className={`text-lg font-semibold ${t.transaction_type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                        {t.transaction_type === 'income' ? '+' : '-'}${Math.abs(t.amount).toFixed(2)}
+                      <div className="text-xl font-bold text-red-600">
+                        ${Math.abs(t.amount).toFixed(2)}
                       </div>
                     </div>
                   ))}
@@ -770,63 +1104,64 @@ const BudgetTracker = () => {
           {!loading && currentView === 'transactions' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-gray-900">Transactions</h2>
+                <h2 className="text-3xl font-bold text-gray-900">Transactions</h2>
                 <button
                   onClick={() => setShowAddTransaction(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:shadow-lg hover:scale-105 transition-all duration-200 font-semibold"
                 >
                   <Plus size={20} />
                   Add Transaction
                 </button>
               </div>
 
-              {/* Filters */}
-              <div className="bg-white rounded-xl p-6 shadow-sm">
-                <div className="flex items-center gap-2 mb-4">
-                  <Filter size={20} className="text-gray-600" />
-                  <h3 className="font-semibold">Filters</h3>
+              <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-200/50">
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="p-2 bg-indigo-100 rounded-lg">
+                    <Filter size={20} className="text-indigo-600" />
+                  </div>
+                  <h3 className="font-bold text-gray-900">Filters</h3>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div>
-                    <label className="block text-sm text-gray-600 mb-2">Search</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Search</label>
                     <div className="relative">
-                      <Search size={18} className="absolute left-3 top-3 text-gray-400" />
+                      <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                       <input
                         type="text"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         placeholder="Search transactions..."
-                        className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full pl-11 pr-4 py-3 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
                       />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-600 mb-2">Start Date</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Start Date</label>
                     <input
                       type="date"
                       value={dateRange.start}
                       onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-4 py-3 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-600 mb-2">End Date</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">End Date</label>
                     <input
                       type="date"
                       value={dateRange.end}
                       onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-4 py-3 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-600 mb-2">Category</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Category</label>
                     <select
                       value={selectedCategory}
                       onChange={(e) => setSelectedCategory(e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-4 py-3 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
                     >
                       <option value="all">All Categories</option>
-                      {Object.keys(categories).map(cat => (
+                      {CATEGORY_OPTIONS.map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
                       ))}
                     </select>
@@ -835,35 +1170,37 @@ const BudgetTracker = () => {
                 {(dateRange.start || dateRange.end || selectedCategory !== 'all' || searchTerm) && (
                   <button
                     onClick={() => {
-                      setDateRange({ start: '', end: '' });
+                      setDateRange(getCurrentMonthRange());
                       setSelectedCategory('all');
                       setSearchTerm('');
                     }}
-                    className="mt-4 text-sm text-blue-600 hover:text-blue-700 font-semibold"
+                    className="mt-4 text-sm text-indigo-600 hover:text-indigo-700 font-bold flex items-center gap-2 hover:gap-3 transition-all"
                   >
+                    <X size={16} />
                     Clear Filters
                   </button>
                 )}
               </div>
 
-              {/* Transactions Table */}
-              <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+              <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-lg overflow-hidden border border-gray-200/50">
                 <div className="overflow-x-auto">
                   <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
+                    <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b-2 border-gray-200">
                       <tr>
-                        <th className="text-left py-4 px-6 text-sm font-semibold text-gray-700">Date</th>
-                        <th className="text-left py-4 px-6 text-sm font-semibold text-gray-700">Description</th>
-                        <th className="text-left py-4 px-6 text-sm font-semibold text-gray-700">Category</th>
-                        <th className="text-right py-4 px-6 text-sm font-semibold text-gray-700">Amount</th>
-                        <th className="text-center py-4 px-6 text-sm font-semibold text-gray-700">Actions</th>
+                        <th className="text-left py-5 px-6 text-sm font-bold text-gray-700 uppercase tracking-wider">Date</th>
+                        <th className="text-left py-5 px-6 text-sm font-bold text-gray-700 uppercase tracking-wider">Description</th>
+                        <th className="text-left py-5 px-6 text-sm font-bold text-gray-700 uppercase tracking-wider">Category</th>
+                        <th className="text-right py-5 px-6 text-sm font-bold text-gray-700 uppercase tracking-wider">Amount</th>
+                        <th className="text-center py-5 px-6 text-sm font-bold text-gray-700 uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {filteredTransactions.length === 0 ? (
                         <tr>
-                          <td colSpan="5" className="text-center py-12 text-gray-500">
-                            No transactions found. Upload a CSV or add transactions manually.
+                          <td colSpan="5" className="text-center py-16">
+                            <FileText size={48} className="mx-auto text-gray-300 mb-4" />
+                            <p className="text-gray-500 font-medium">No transactions found</p>
+                            <p className="text-sm text-gray-400 mt-1">Upload a CSV or add transactions manually</p>
                           </td>
                         </tr>
                       ) : (
@@ -875,7 +1212,7 @@ const BudgetTracker = () => {
                                   <input
                                     type="date"
                                     defaultValue={t.transaction_date}
-                                    className="px-2 py-1 border border-gray-300 rounded"
+                                    className="px-3 py-2 border-2 border-gray-300 rounded-xl focus:border-indigo-500 outline-none"
                                     onChange={(e) => setEditingTransaction({...editingTransaction, transaction_date: e.target.value})}
                                   />
                                 </td>
@@ -883,17 +1220,17 @@ const BudgetTracker = () => {
                                   <input
                                     type="text"
                                     defaultValue={t.description}
-                                    className="w-full px-2 py-1 border border-gray-300 rounded"
+                                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-xl focus:border-indigo-500 outline-none"
                                     onChange={(e) => setEditingTransaction({...editingTransaction, description: e.target.value})}
                                   />
                                 </td>
                                 <td className="py-4 px-6">
                                   <select
                                     defaultValue={t.category}
-                                    className="px-2 py-1 border border-gray-300 rounded"
+                                    className="px-3 py-2 border-2 border-gray-300 rounded-xl focus:border-indigo-500 outline-none"
                                     onChange={(e) => setEditingTransaction({...editingTransaction, category: e.target.value})}
                                   >
-                                    {Object.keys(categories).map(cat => (
+                                    {CATEGORY_OPTIONS.map(cat => (
                                       <option key={cat} value={cat}>{cat}</option>
                                     ))}
                                   </select>
@@ -902,22 +1239,22 @@ const BudgetTracker = () => {
                                   <input
                                     type="number"
                                     step="0.01"
-                                    defaultValue={t.amount}
-                                    className="w-24 px-2 py-1 border border-gray-300 rounded text-right"
-                                    onChange={(e) => setEditingTransaction({...editingTransaction, amount: parseFloat(e.target.value)})}
+                                    defaultValue={Math.abs(t.amount)}
+                                    className="w-32 px-3 py-2 border-2 border-gray-300 rounded-xl text-right focus:border-indigo-500 outline-none"
+                                    onChange={(e) => setEditingTransaction({...editingTransaction, amount: -Math.abs(parseFloat(e.target.value))})}
                                   />
                                 </td>
                                 <td className="py-4 px-6">
                                   <div className="flex items-center justify-center gap-2">
                                     <button
                                       onClick={() => handleUpdateTransaction(t.id, editingTransaction)}
-                                      className="p-2 text-green-600 hover:bg-green-50 rounded-lg"
+                                      className="p-2.5 text-white bg-green-500 hover:bg-green-600 rounded-xl transition-all hover:scale-110"
                                     >
                                       <Check size={18} />
                                     </button>
                                     <button
                                       onClick={() => setEditingTransaction(null)}
-                                      className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+                                      className="p-2.5 text-gray-600 hover:bg-gray-200 rounded-xl transition-all hover:scale-110"
                                     >
                                       <X size={18} />
                                     </button>
@@ -926,32 +1263,39 @@ const BudgetTracker = () => {
                               </>
                             ) : (
                               <>
-                                <td className="py-4 px-6 text-gray-900">{t.transaction_date}</td>
                                 <td className="py-4 px-6">
-                                  <div className="font-medium text-gray-900">{t.description}</div>
-                                  {t.merchant && <div className="text-sm text-gray-500">{t.merchant}</div>}
+                                  <div className="flex items-center gap-2 text-gray-700 font-medium">
+                                    <Calendar size={16} className="text-gray-400" />
+                                    {t.transaction_date}
+                                  </div>
                                 </td>
                                 <td className="py-4 px-6">
-                                  <span className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
-                                    {t.category}
+                                  <div className="font-semibold text-gray-900">{t.description}</div>
+                                  {t.merchant && <div className="text-sm text-gray-500 mt-1">{t.merchant}</div>}
+                                </td>
+                                <td className="py-4 px-6">
+                                  <span className={`px-4 py-2 rounded-xl text-sm font-semibold border ${
+                                    t.category === 'Other' || !t.category
+                                      ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                                      : 'bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-700 border-indigo-100'
+                                  }`}>
+                                    {t.category || 'Uncategorized'}
                                   </span>
                                 </td>
-                                <td className={`py-4 px-6 text-right font-semibold ${
-                                  t.transaction_type === 'income' ? 'text-green-600' : 'text-red-600'
-                                }`}>
-                                  {t.transaction_type === 'income' ? '+' : '-'}${Math.abs(t.amount).toFixed(2)}
+                                <td className="py-4 px-6 text-right text-lg font-bold text-red-600">
+                                  ${Math.abs(t.amount).toFixed(2)}
                                 </td>
                                 <td className="py-4 px-6">
                                   <div className="flex items-center justify-center gap-2">
                                     <button
                                       onClick={() => setEditingTransaction(t)}
-                                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                      className="p-2.5 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all hover:scale-110"
                                     >
                                       <Edit2 size={18} />
                                     </button>
                                     <button
                                       onClick={() => handleDeleteTransaction(t.id)}
-                                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                      className="p-2.5 text-red-600 hover:bg-red-50 rounded-xl transition-all hover:scale-110"
                                     >
                                       <Trash2 size={18} />
                                     </button>
@@ -971,82 +1315,86 @@ const BudgetTracker = () => {
 
           {!loading && currentView === 'analytics' && (
             <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-gray-900">Analytics & Insights</h2>
+              <h2 className="text-3xl font-bold text-gray-900">Analytics & Insights</h2>
 
-              {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <div className="text-sm text-gray-600 mb-2">Total Transactions</div>
-                  <div className="text-3xl font-bold text-gray-900">{kpis.transactionCount}</div>
-                  <div className="text-sm text-gray-500 mt-2">All time</div>
+                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-300">
+                  <div className="text-sm font-medium mb-2 opacity-90">Total Transactions</div>
+                  <div className="text-4xl font-bold mb-2">{kpis.transactionCount}</div>
+                  <div className="text-sm opacity-75">{viewMode === 'month' ? 'This month' : viewMode === 'year' ? 'This year' : 'All time'}</div>
                 </div>
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <div className="text-sm text-gray-600 mb-2">Average Transaction</div>
-                  <div className="text-3xl font-bold text-gray-900">${kpis.avgTransaction.toFixed(2)}</div>
-                  <div className="text-sm text-gray-500 mt-2">Per transaction</div>
+                <div className="bg-gradient-to-br from-pink-500 to-rose-600 rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-300">
+                  <div className="text-sm font-medium mb-2 opacity-90">Average Purchase</div>
+                  <div className="text-4xl font-bold mb-2">${kpis.avgTransaction.toFixed(2)}</div>
+                  <div className="text-sm opacity-75">Per transaction</div>
                 </div>
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <div className="text-sm text-gray-600 mb-2">Active Categories</div>
-                  <div className="text-3xl font-bold text-gray-900">{Object.keys(categories).length}</div>
-                  <div className="text-sm text-gray-500 mt-2">Categories used</div>
-                </div>
-              </div>
-
-              {/* Category Breakdown Table */}
-              <div className="bg-white rounded-xl p-6 shadow-sm">
-                <h3 className="text-lg font-semibold mb-4">Spending Breakdown</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Category</th>
-                        <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Amount</th>
-                        <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">% of Total</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Visual</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {Object.entries(categories)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([category, amount]) => {
-                          const percentage = (amount / Object.values(categories).reduce((a, b) => a + b, 0)) * 100;
-                          return (
-                            <tr key={category} className="hover:bg-gray-50">
-                              <td className="py-3 px-4 font-medium text-gray-900">{category}</td>
-                              <td className="py-3 px-4 text-right font-semibold text-gray-900">
-                                ${Math.abs(amount).toFixed(2)}
-                              </td>
-                              <td className="py-3 px-4 text-right text-gray-600">
-                                {percentage.toFixed(1)}%
-                              </td>
-                              <td className="py-3 px-4">
-                                <div className="w-full bg-gray-200 rounded-full h-2">
-                                  <div
-                                    className="bg-blue-600 h-2 rounded-full"
-                                    style={{ width: `${percentage}%` }}
-                                  ></div>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
+                <div className="bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-300">
+                  <div className="text-sm font-medium mb-2 opacity-90">Active Categories</div>
+                  <div className="text-4xl font-bold mb-2">{Object.keys(categories).length}</div>
+                  <div className="text-sm opacity-75">Categories used</div>
                 </div>
               </div>
 
-              {/* Monthly Trend Chart */}
-              <div className="bg-white rounded-xl p-6 shadow-sm">
-                <h3 className="text-lg font-semibold mb-4">Income vs Expenses Over Time</h3>
+              <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-200/50">
+                <h3 className="text-xl font-bold text-gray-900 mb-5">Spending Breakdown</h3>
+                <div className="space-y-4">
+                  {Object.entries(categories)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([category, amount], index) => {
+                      const percentage = (amount / Object.values(categories).reduce((a, b) => a + b, 0)) * 100;
+                      return (
+                        <div key={category} className="group hover:scale-[1.02] transition-all duration-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-3">
+                              <div 
+                                className="w-3 h-3 rounded-full"
+                                style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                              ></div>
+                              <span className="font-semibold text-gray-900">{category}</span>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <span className="text-sm text-gray-500 font-medium">{percentage.toFixed(1)}%</span>
+                              <span className="font-bold text-gray-900">${Math.abs(amount).toFixed(2)}</span>
+                            </div>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                            <div
+                              className="h-3 rounded-full transition-all duration-500 group-hover:opacity-80"
+                              style={{ 
+                                width: `${percentage}%`,
+                                backgroundColor: COLORS[index % COLORS.length]
+                              }}
+                            ></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              <div className="bg-white/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-200/50">
+                <h3 className="text-xl font-bold text-gray-900 mb-5">Spending Over Time</h3>
                 <ResponsiveContainer width="100%" height={400}>
                   <BarChart data={monthlyData}>
+                    <defs>
+                      <linearGradient id="barExpenses" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#ef4444" stopOpacity={0.8}/>
+                        <stop offset="100%" stopColor="#ef4444" stopOpacity={0.4}/>
+                      </linearGradient>
+                    </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="month" stroke="#6b7280" />
-                    <YAxis stroke="#6b7280" />
-                    <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb' }} />
+                    <XAxis dataKey="month" stroke="#6b7280" style={{ fontSize: '12px' }} />
+                    <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)', 
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '12px',
+                        boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                      }} 
+                    />
                     <Legend />
-                    <Bar dataKey="income" fill="#10b981" name="Income" />
-                    <Bar dataKey="expenses" fill="#ef4444" name="Expenses" />
+                    <Bar dataKey="expenses" fill="url(#barExpenses)" name="Expenses" radius={[8, 8, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -1055,90 +1403,92 @@ const BudgetTracker = () => {
         </main>
       </div>
 
-      {/* Add Transaction Modal */}
       {showAddTransaction && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" style={{ animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl" style={{ animation: 'slideUp 0.3s ease-out' }}>
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-2xl font-bold text-gray-900">Add Transaction</h3>
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl">
+                  <Plus size={24} className="text-white" />
+                </div>
+                <h3 className="text-2xl font-bold text-gray-900">Add Transaction</h3>
+              </div>
               <button
                 onClick={() => setShowAddTransaction(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-gray-100 rounded-xl transition-all duration-200"
               >
                 <X size={24} />
               </button>
             </div>
-            <form onSubmit={handleAddTransaction} className="space-y-4">
+            <form onSubmit={handleAddTransaction} className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Date</label>
                 <input
                   type="date"
                   name="date"
                   required
                   defaultValue={new Date().toISOString().split('T')[0]}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-4 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
                 <input
                   type="text"
                   name="description"
                   required
-                  placeholder="e.g., Grocery shopping"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., Grocery shopping at Loblaws"
+                  className="w-full px-4 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Amount</label>
-                <input
-                  type="number"
-                  name="amount"
-                  step="0.01"
-                  required
-                  placeholder="Negative for expenses, positive for income"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <p className="text-xs text-gray-500 mt-1">Use negative (-) for expenses, positive (+) for income</p>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Amount (CAD)</label>
+                <div className="relative">
+                  <DollarSign size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="number"
+                    name="amount"
+                    step="0.01"
+                    required
+                    placeholder="0.00"
+                    className="w-full pl-12 pr-4 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
+                  />
+                </div>
+                <p className="text-xs text-gray-500 mt-2">Enter the expense amount (always positive)</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Category</label>
                 <select
                   name="category"
                   required
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-4 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none"
                 >
-                  <option value="">Select category</option>
-                  <option value="Food">Food</option>
-                  <option value="Transportation">Transportation</option>
-                  <option value="Housing">Housing</option>
-                  <option value="Entertainment">Entertainment</option>
-                  <option value="Healthcare">Healthcare</option>
-                  <option value="Shopping">Shopping</option>
-                  <option value="Income">Income</option>
-                  <option value="Other">Other</option>
+                  <option value="">Select a category</option>
+                  {CATEGORY_OPTIONS.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Notes (optional)</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Notes (optional)</label>
                 <textarea
                   name="notes"
                   rows="3"
-                  placeholder="Additional notes..."
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Add any additional details..."
+                  className="w-full px-4 py-3.5 bg-gray-50 border-2 border-transparent rounded-xl focus:border-indigo-500 focus:bg-white transition-all outline-none resize-none"
                 ></textarea>
               </div>
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
                   onClick={() => setShowAddTransaction(false)}
-                  className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-semibold"
+                  className="flex-1 px-5 py-3.5 border-2 border-gray-300 text-gray-700 rounded-xl hover:bg-gray-50 transition-all font-semibold hover:scale-105 active:scale-95"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                  className="flex-1 px-5 py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:shadow-lg transition-all font-semibold hover:scale-105 active:scale-95"
                 >
                   Add Transaction
                 </button>
@@ -1147,6 +1497,120 @@ const BudgetTracker = () => {
           </div>
         </div>
       )}
+
+      {showQuickCategorize && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" style={{ animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl max-h-[80vh] overflow-y-auto" style={{ animation: 'slideUp 0.3s ease-out' }}>
+            <div className="flex items-center justify-between mb-6 sticky top-0 bg-white pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-gradient-to-br from-yellow-500 to-orange-600 rounded-xl">
+                  <Store size={24} className="text-white" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">Quick Categorize</h3>
+                  <p className="text-sm text-gray-600">Categorize all transactions from the same merchant at once</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowQuickCategorize(false)}
+                className="p-2 hover:bg-gray-100 rounded-xl transition-all duration-200"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            {merchantGroups.length === 0 ? (
+              <div className="text-center py-12">
+                <Check size={48} className="mx-auto text-green-500 mb-4" />
+                <p className="text-gray-600 font-medium">All transactions are categorized!</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {merchantGroups.map((group, idx) => (
+                  <div key={idx} className="p-5 bg-gray-50 rounded-xl border border-gray-200 hover:border-indigo-300 transition-all">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <Store size={20} className="text-gray-600" />
+                          <h4 className="font-bold text-gray-900">{group.merchant}</h4>
+                        </div>
+                        <p className="text-sm text-gray-600">
+                          {group.count} transaction{group.count !== 1 ? 's' : ''} • ${group.totalAmount.toFixed(2)} total
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      {CATEGORY_OPTIONS.filter(cat => cat !== 'Other').map(category => (
+                        <button
+                          key={category}
+                          onClick={() => categorizeMerchantTransactions(group.merchant, category)}
+                          className="px-4 py-2 bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-500 rounded-lg text-sm font-semibold text-gray-700 hover:text-indigo-700 transition-all hover:scale-105"
+                        >
+                          {category}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes slideUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        html { scroll-behavior: smooth; }
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track {
+          background: #f1f1f1;
+          border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+          background: linear-gradient(to bottom, #6366f1, #8b5cf6);
+          border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(to bottom, #4f46e5, #7c3aed);
+        }
+        .animate-pulse {
+          animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        .animate-spin {
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 };
