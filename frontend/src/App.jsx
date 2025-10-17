@@ -95,24 +95,37 @@ const BudgetTracker = () => {
       options.body = JSON.stringify(body);
     }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+    try {
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
 
-    if (response.status === 401) {
-      const refreshed = await refreshToken();
-      if (refreshed) {
-        return apiCall(endpoint, method, body);
-      } else {
-        handleLogout();
-        return null;
+      if (response.status === 401) {
+        const refreshed = await refreshToken();
+        if (refreshed) {
+          return apiCall(endpoint, method, body);
+        } else {
+          handleLogout();
+          throw new Error('Authentication failed');
+        }
       }
-    }
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error?.message || 'Request failed');
-    }
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = 'Request failed';
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.error?.message || errorJson.error || errorMessage;
+        } catch {
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
 
-    return response.json();
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error(`API call failed: ${method} ${endpoint}`, error);
+      throw error;
+    }
   };
 
   const refreshToken = async () => {
@@ -224,43 +237,96 @@ const BudgetTracker = () => {
         apiCall('/analytics/insights')
       ]);
 
-      // Filter out payments and returns - we only care about actual spending
-      const spendingTransactions = transactionsData.transactions.filter(t => 
-        t.transaction_type !== 'payment' && t.category !== 'Return/Refund'
-      );
+      if (!transactionsData || !transactionsData.transactions) {
+        throw new Error('Invalid transaction data received');
+      }
 
-      setTransactions(spendingTransactions);
-      setFilteredTransactions(spendingTransactions);
-      setKpis(kpisData.kpis);
-      setMonthlyData(kpisData.monthlyTrend);
-      setInsights(insightsData);
+      // AGGRESSIVELY filter out ALL payments and returns - we only want actual spending
+      const spendingTransactions = transactionsData.transactions.filter(t => {
+        if (!t || !t.id) return false;
+        
+        // Filter by amount - only keep positive expenses (stored as negative in DB)
+        if (t.amount >= 0) return false; // Skip payments/returns (positive or zero amounts)
+        
+        // Filter by transaction type
+        if (t.transaction_type === 'payment' || t.transaction_type === 'return') return false;
+        
+        // Filter by category
+        if (t.category === 'Return/Refund' || t.category === 'Payment') return false;
+        
+        // Filter by description keywords
+        if (t.description) {
+          const desc = t.description.toLowerCase();
+          if (desc.includes('payment') || 
+              desc.includes('thank you') ||
+              desc.includes('autopay') ||
+              desc.includes('pre-authorized payment') ||
+              desc.includes('credit card payment') ||
+              desc.includes('payment - thank you') ||
+              desc.includes('return') ||
+              desc.includes('refund')) {
+            return false;
+          }
+        }
+        
+        return true; // Keep this transaction
+      });
+
+      // Ensure all transactions have required fields
+      const validTransactions = spendingTransactions.map(t => ({
+        ...t,
+        id: t.id,
+        description: t.description || 'Unknown',
+        amount: t.amount || 0,
+        category: t.category || 'Other',
+        transaction_date: t.transaction_date,
+        merchant: t.merchant || null,
+        transaction_type: 'expense' // Force to expense
+      }));
+
+      setTransactions(validTransactions);
+      setFilteredTransactions(validTransactions);
+      setKpis(kpisData?.kpis || kpis);
+      setMonthlyData(kpisData?.monthlyTrend || []);
+      setInsights(insightsData || []);
 
       // Group by category for spending breakdown
       const catGroups = {};
-      spendingTransactions.forEach(t => {
-        if (!catGroups[t.category]) {
-          catGroups[t.category] = 0;
+      validTransactions.forEach(t => {
+        const cat = t.category || 'Other';
+        if (!catGroups[cat]) {
+          catGroups[cat] = 0;
         }
-        catGroups[t.category] += Math.abs(t.amount);
+        catGroups[cat] += Math.abs(t.amount || 0);
       });
       setCategories(catGroups);
 
       // Group uncategorized transactions by merchant for quick categorization
-      groupTransactionsByMerchant(spendingTransactions);
+      groupTransactionsByMerchant(validTransactions);
     } catch (error) {
-      showNotification('Failed to load data', 'error');
+      console.error('Load dashboard error:', error);
+      showNotification('Failed to load data: ' + error.message, 'error');
     } finally {
       setLoading(false);
     }
   };
 
   const groupTransactionsByMerchant = (txns) => {
-    const uncategorized = txns.filter(t => t.category === 'Other' || !t.category);
+    const uncategorized = txns.filter(t => 
+      (t.category === 'Other' || !t.category) && t.id && t.description
+    );
+    
+    if (uncategorized.length === 0) {
+      setMerchantGroups([]);
+      return;
+    }
     
     // Group by merchant/description
     const groups = {};
     uncategorized.forEach(t => {
-      const key = t.merchant || extractMerchantFromDescription(t.description);
+      const key = extractMerchantFromDescription(t.description);
+      if (!key || key.trim() === '') return;
+      
       if (!groups[key]) {
         groups[key] = [];
       }
@@ -269,11 +335,12 @@ const BudgetTracker = () => {
 
     // Convert to array and sort by count
     const groupArray = Object.entries(groups)
+      .filter(([merchant, txns]) => merchant && txns.length > 0)
       .map(([merchant, txns]) => ({
         merchant,
         transactions: txns,
         count: txns.length,
-        totalAmount: txns.reduce((sum, t) => sum + Math.abs(t.amount), 0)
+        totalAmount: txns.reduce((sum, t) => sum + Math.abs(t.amount || 0), 0)
       }))
       .sort((a, b) => b.count - a.count);
 
@@ -281,37 +348,77 @@ const BudgetTracker = () => {
   };
 
   const extractMerchantFromDescription = (description) => {
+    if (!description || typeof description !== 'string') return 'UNKNOWN';
+    
     // Extract merchant name from transaction description
-    // Remove common prefixes and dates
-    let merchant = description.toUpperCase();
+    let merchant = description.toUpperCase().trim();
+    
+    // Remove dates in various formats
     merchant = merchant.replace(/\d{2}\/\d{2}\/\d{4}/g, '');
     merchant = merchant.replace(/\d{2}-\d{2}-\d{4}/g, '');
-    merchant = merchant.replace(/PURCHASE|PAYMENT|DEBIT|CREDIT/gi, '');
+    merchant = merchant.replace(/\d{4}-\d{2}-\d{2}/g, '');
+    
+    // Remove common transaction prefixes/suffixes
+    merchant = merchant.replace(/PURCHASE\s*-?\s*/gi, '');
+    merchant = merchant.replace(/PAYMENT\s*-?\s*/gi, '');
+    merchant = merchant.replace(/DEBIT\s*-?\s*/gi, '');
+    merchant = merchant.replace(/CREDIT\s*-?\s*/gi, '');
+    merchant = merchant.replace(/POS\s*-?\s*/gi, '');
+    merchant = merchant.replace(/ONLINE\s*-?\s*/gi, '');
+    merchant = merchant.replace(/\s*#\d+/g, ''); // Remove reference numbers
+    
     merchant = merchant.trim();
     
-    // Take first significant part
-    const parts = merchant.split(/\s+/);
-    return parts.slice(0, 3).join(' ').substring(0, 50);
+    // If empty after cleaning, return original (truncated)
+    if (!merchant) {
+      return description.substring(0, 30).toUpperCase();
+    }
+    
+    // Take first 2-3 significant words
+    const parts = merchant.split(/\s+/).filter(p => p.length > 0);
+    const result = parts.slice(0, 3).join(' ').substring(0, 50);
+    
+    return result || 'UNKNOWN';
   };
 
   const categorizeMerchantTransactions = async (merchant, category) => {
     const group = merchantGroups.find(g => g.merchant === merchant);
-    if (!group) return;
+    if (!group || !group.transactions || group.transactions.length === 0) {
+      showNotification('No transactions found for this merchant', 'error');
+      return;
+    }
 
     try {
       setLoading(true);
       
-      // Update all transactions from this merchant
-      await Promise.all(
-        group.transactions.map(t => 
-          apiCall(`/transactions/${t.id}`, 'PUT', { category })
-        )
+      // Update transactions one by one with error handling for each
+      const results = await Promise.allSettled(
+        group.transactions.map(t => {
+          if (!t.id) {
+            console.error('Transaction missing ID:', t);
+            return Promise.reject(new Error('Transaction missing ID'));
+          }
+          return apiCall(`/transactions/${t.id}`, 'PUT', { category });
+        })
       );
       
-      showNotification(`Categorized ${group.count} transactions from ${merchant}`, 'success');
-      loadDashboardData();
+      // Count successes and failures
+      const successful = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+      
+      if (failed > 0) {
+        console.error('Failed updates:', results.filter(r => r.status === 'rejected'));
+        showNotification(`Updated ${successful} transactions, ${failed} failed`, 'error');
+      } else {
+        showNotification(`Categorized ${successful} transactions from ${merchant}`, 'success');
+      }
+      
+      // Close modal and reload
+      setShowQuickCategorize(false);
+      await loadDashboardData();
     } catch (error) {
-      showNotification('Failed to update categories', 'error');
+      console.error('Categorization error:', error);
+      showNotification('Failed to update categories: ' + error.message, 'error');
     } finally {
       setLoading(false);
     }
@@ -321,30 +428,59 @@ const BudgetTracker = () => {
     const file = e.target.files[0];
     if (!file) return;
 
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      showNotification('Please upload a CSV file', 'error');
+      return;
+    }
+
     Papa.parse(file, {
       header: true,
       dynamicTyping: true,
       skipEmptyLines: true,
       complete: async (results) => {
-        const normalizedData = normalizeTransactions(results.data, file.name);
-        
         try {
+          if (!results.data || results.data.length === 0) {
+            showNotification('CSV file is empty', 'error');
+            return;
+          }
+
+          const normalizedData = normalizeTransactions(results.data, file.name);
+          
+          if (normalizedData.length === 0) {
+            showNotification('No valid transactions found in CSV', 'error');
+            return;
+          }
+
           setLoading(true);
           const data = await apiCall('/transactions/bulk-import', 'POST', {
             transactions: normalizedData,
             sourceFile: file.name
           });
           
-          showNotification(`Imported ${data.imported} transactions (${data.duplicates} duplicates skipped)`, 'success');
-          loadDashboardData();
+          if (data.imported === 0 && data.duplicates > 0) {
+            showNotification(`All ${data.duplicates} transactions were duplicates`, 'info');
+          } else {
+            showNotification(
+              `Imported ${data.imported} new transaction${data.imported !== 1 ? 's' : ''}` +
+              (data.duplicates > 0 ? ` (${data.duplicates} duplicate${data.duplicates !== 1 ? 's' : ''} skipped)` : ''),
+              'success'
+            );
+          }
+          
+          await loadDashboardData();
         } catch (error) {
+          console.error('Import error:', error);
           showNotification('Import failed: ' + error.message, 'error');
         } finally {
           setLoading(false);
+          // Reset file input
+          e.target.value = '';
         }
       },
       error: (error) => {
+        console.error('CSV parse error:', error);
         showNotification('Error parsing CSV: ' + error.message, 'error');
+        e.target.value = '';
       }
     });
   };
@@ -361,7 +497,7 @@ const BudgetTracker = () => {
       
       const description = cleanRow.Description || cleanRow.description || 
                          cleanRow.Merchant || cleanRow.merchant || 
-                         cleanRow.Name || cleanRow.Memo || 'Unknown';
+                         cleanRow.Name || cleanRow.Memo || 'Unknown Transaction';
       
       let amount = parseFloat(
         cleanRow.Amount || cleanRow.amount || 
@@ -369,54 +505,73 @@ const BudgetTracker = () => {
         cleanRow.Value || cleanRow.Total || 0
       );
 
+      // Handle NaN
+      if (isNaN(amount)) amount = 0;
+
       // Credit card logic: positive = expense, negative = payment/return
+      // We SKIP payments/returns entirely - don't even import them
       let transactionType = 'expense';
-      if (amount < 0) {
-        transactionType = 'payment'; // Skip this in the app
-        amount = Math.abs(amount);
+      if (amount < 0 || amount === 0) {
+        return null; // Skip payments, returns, and zero amounts
       }
 
-      const category = cleanRow.Category || cleanRow.category || 
-                      categorizeTransaction(description, amount);
+      const merchantName = cleanRow.Merchant || cleanRow.merchant || extractMerchantFromDescription(description);
+      const category = cleanRow.Category || cleanRow.category || categorizeTransaction(description, amount);
+
+      // Also check description for payment keywords
+      const descLower = description.toLowerCase();
+      if (descLower.includes('payment') || 
+          descLower.includes('thank you') || 
+          descLower.includes('autopay') ||
+          descLower.includes('pre-authorized') ||
+          descLower.includes('credit card payment')) {
+        return null; // Skip payments
+      }
 
       return {
         transactionDate: date,
-        description,
-        amount: transactionType === 'expense' ? -Math.abs(amount) : Math.abs(amount),
+        description: description.substring(0, 255), // Limit length
+        amount: -Math.abs(amount), // Always negative for expenses
         category,
-        transactionType,
-        merchant: cleanRow.Merchant || cleanRow.merchant || extractMerchantFromDescription(description)
+        transactionType: 'expense',
+        merchant: merchantName ? merchantName.substring(0, 255) : null
       };
-    });
+    }).filter(t => t !== null); // Remove all nulls (payments/returns)
   };
 
   const categorizeTransaction = (description, amount) => {
+    if (!description || typeof description !== 'string') return 'Other';
+    
     const desc = description.toLowerCase();
     
     // Food & Dining
     if (desc.includes('restaurant') || desc.includes('cafe') || desc.includes('coffee') || 
         desc.includes('mcdonald') || desc.includes('starbucks') || desc.includes('pizza') ||
         desc.includes('burger') || desc.includes('doordash') || desc.includes('uber eats') ||
-        desc.includes('skip the dishes') || desc.includes('tim hortons') || desc.includes('subway')) 
+        desc.includes('skip the dishes') || desc.includes('tim hortons') || desc.includes('subway') ||
+        desc.includes('wendys') || desc.includes('a&w') || desc.includes('harveys')) 
         return 'Food & Dining';
     
     // Groceries
     if (desc.includes('grocery') || desc.includes('supermarket') || desc.includes('walmart') ||
         desc.includes('costco') || desc.includes('safeway') || desc.includes('loblaws') ||
         desc.includes('metro') || desc.includes('sobeys') || desc.includes('food basics') ||
-        desc.includes('no frills') || desc.includes('freshco')) 
+        desc.includes('no frills') || desc.includes('freshco') || desc.includes('whole foods') ||
+        desc.includes('farm boy') || desc.includes('t&t supermarket')) 
         return 'Groceries';
     
     // Gas & Fuel
     if (desc.includes('gas') || desc.includes('petro') || desc.includes('shell') ||
         desc.includes('esso') || desc.includes('chevron') || desc.includes('fuel') ||
-        desc.includes('husky') || desc.includes('pioneer')) 
+        desc.includes('husky') || desc.includes('pioneer') || desc.includes('ultramar') ||
+        desc.includes('petro-canada') || desc.includes('canadian tire gas')) 
         return 'Gas & Fuel';
     
     // Transportation
     if (desc.includes('transport') || desc.includes('uber') || desc.includes('lyft') ||
         desc.includes('taxi') || desc.includes('transit') || desc.includes('parking') ||
-        desc.includes('presto') || desc.includes('ttc') || desc.includes('go train')) 
+        desc.includes('presto') || desc.includes('ttc') || desc.includes('go train') ||
+        desc.includes('go transit') || desc.includes('via rail')) 
         return 'Transportation';
     
     // Housing & Utilities
@@ -424,27 +579,31 @@ const BudgetTracker = () => {
         return 'Housing & Rent';
     if (desc.includes('electric') || desc.includes('hydro') || desc.includes('water') ||
         desc.includes('internet') || desc.includes('phone') || desc.includes('rogers') ||
-        desc.includes('bell') || desc.includes('telus') || desc.includes('fido')) 
+        desc.includes('bell') || desc.includes('telus') || desc.includes('fido') ||
+        desc.includes('freedom mobile') || desc.includes('shaw') || desc.includes('cogeco')) 
         return 'Utilities';
     
     // Entertainment & Subscriptions
     if (desc.includes('netflix') || desc.includes('spotify') || desc.includes('amazon prime') ||
-        desc.includes('disney') || desc.includes('subscription') || desc.includes('apple.com')) 
+        desc.includes('disney') || desc.includes('subscription') || desc.includes('apple.com') ||
+        desc.includes('youtube premium') || desc.includes('hbo') || desc.includes('crave')) 
         return 'Subscriptions';
     if (desc.includes('movie') || desc.includes('cinema') || desc.includes('theatre') ||
-        desc.includes('game') || desc.includes('entertainment') || desc.includes('concert')) 
+        desc.includes('game') || desc.includes('entertainment') || desc.includes('concert') ||
+        desc.includes('cineplex') || desc.includes('landmark')) 
         return 'Entertainment';
     
     // Healthcare
     if (desc.includes('pharmacy') || desc.includes('medical') || desc.includes('doctor') ||
         desc.includes('dental') || desc.includes('health') || desc.includes('shoppers drug') ||
-        desc.includes('rexall')) 
+        desc.includes('rexall') || desc.includes('hospital') || desc.includes('clinic')) 
         return 'Healthcare';
     
     // Shopping
     if (desc.includes('amazon') || desc.includes('store') || desc.includes('shop') ||
         desc.includes('mall') || desc.includes('retail') || desc.includes('best buy') ||
-        desc.includes('canadian tire') || desc.includes('home depot')) 
+        desc.includes('canadian tire') || desc.includes('home depot') || desc.includes('lowes') ||
+        desc.includes('ikea') || desc.includes('winners') || desc.includes('marshalls')) 
         return 'Shopping';
     
     // Insurance
@@ -453,8 +612,14 @@ const BudgetTracker = () => {
     
     // Travel
     if (desc.includes('airline') || desc.includes('hotel') || desc.includes('airbnb') ||
-        desc.includes('travel') || desc.includes('booking') || desc.includes('flight')) 
+        desc.includes('travel') || desc.includes('booking') || desc.includes('flight') ||
+        desc.includes('expedia') || desc.includes('air canada') || desc.includes('westjet')) 
         return 'Travel';
+    
+    // Education
+    if (desc.includes('school') || desc.includes('university') || desc.includes('college') ||
+        desc.includes('tuition') || desc.includes('education')) 
+        return 'Education';
     
     return 'Other';
   };
@@ -487,14 +652,31 @@ const BudgetTracker = () => {
   };
 
   const handleUpdateTransaction = async (id, updates) => {
+    if (!id) {
+      showNotification('Invalid transaction ID', 'error');
+      return;
+    }
+
     try {
       setLoading(true);
-      await apiCall(`/transactions/${id}`, 'PUT', updates);
+      
+      // Validate updates
+      const validUpdates = {};
+      if (updates.transaction_date) validUpdates.transactionDate = updates.transaction_date;
+      if (updates.description) validUpdates.description = updates.description;
+      if (updates.category) validUpdates.category = updates.category;
+      if (updates.amount !== undefined) {
+        // Ensure amount is negative for expenses
+        validUpdates.amount = -Math.abs(updates.amount);
+      }
+      
+      await apiCall(`/transactions/${id}`, 'PUT', validUpdates);
       showNotification('Transaction updated', 'success');
       setEditingTransaction(null);
-      loadDashboardData();
+      await loadDashboardData();
     } catch (error) {
-      showNotification('Failed to update transaction', 'error');
+      console.error('Update transaction error:', error);
+      showNotification('Failed to update transaction: ' + error.message, 'error');
     } finally {
       setLoading(false);
     }
@@ -571,7 +753,10 @@ const BudgetTracker = () => {
   };
 
   const getUncategorizedCount = () => {
-    return transactions.filter(t => t.category === 'Other' || !t.category).length;
+    if (!transactions || !Array.isArray(transactions)) return 0;
+    return transactions.filter(t => 
+      t && (t.category === 'Other' || !t.category || t.category.trim() === '')
+    ).length;
   };
 
   if (!isAuthenticated) {
@@ -1514,18 +1699,33 @@ const BudgetTracker = () => {
               <button
                 onClick={() => setShowQuickCategorize(false)}
                 className="p-2 hover:bg-gray-100 rounded-xl transition-all duration-200"
+                disabled={loading}
               >
                 <X size={24} />
               </button>
             </div>
             
-            {merchantGroups.length === 0 ? (
+            {loading ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-4"></div>
+                <p className="text-gray-600 font-medium">Updating categories...</p>
+              </div>
+            ) : merchantGroups.length === 0 ? (
               <div className="text-center py-12">
                 <Check size={48} className="mx-auto text-green-500 mb-4" />
                 <p className="text-gray-600 font-medium">All transactions are categorized!</p>
+                <button
+                  onClick={() => setShowQuickCategorize(false)}
+                  className="mt-4 px-6 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+                >
+                  Close
+                </button>
               </div>
             ) : (
               <div className="space-y-4">
+                <p className="text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  💡 <strong>Tip:</strong> Click a category to apply it to all transactions from that merchant
+                </p>
                 {merchantGroups.map((group, idx) => (
                   <div key={idx} className="p-5 bg-gray-50 rounded-xl border border-gray-200 hover:border-indigo-300 transition-all">
                     <div className="flex items-start justify-between mb-3">
@@ -1544,7 +1744,8 @@ const BudgetTracker = () => {
                         <button
                           key={category}
                           onClick={() => categorizeMerchantTransactions(group.merchant, category)}
-                          className="px-4 py-2 bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-500 rounded-lg text-sm font-semibold text-gray-700 hover:text-indigo-700 transition-all hover:scale-105"
+                          disabled={loading}
+                          className="px-4 py-2 bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-500 rounded-lg text-sm font-semibold text-gray-700 hover:text-indigo-700 transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {category}
                         </button>
